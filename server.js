@@ -1,20 +1,21 @@
-const fs = require('fs')
-const path = require('path')
-const express = require('express')
-const request = require('./util/request')
-const packageJSON = require('./package.json')
-const exec = require('child_process').exec
-const cache = require('./util/apicache').middleware
-const { cookieToJson } = require('./util/index')
-const fileUpload = require('express-fileupload')
-const decode = require('safe-decode-uri-component')
-
-/**
- * The version check result.
- * @readonly
- * @enum {number}
- */
-const VERSION_CHECK_RESULT = {
+      const fs = require('fs')
+      const path = require('path')
+      const express = require('express')
+      const request = require('./util/request')
+      const packageJSON = require('./package.json')
+      const exec = require('child_process').exec
+      const cache = require('./util/apicache').middleware
+      const { cookieToJson } = require('./util/index')
+      const fileUpload = require('express-fileupload')
+      const decode = require('safe-decode-uri-component')
+      const { qq } = require('./util/qq')
+      const { kugou } = require('./util/kugou')
+      /**
+       * The version check result.
+       * @readonly
+       * @enum {number}
+       */
+      const VERSION_CHECK_RESULT = {
   FAILED: -1,
   NOT_LATEST: 0,
   LATEST: 1,
@@ -116,11 +117,11 @@ async function checkVersion() {
             ? VERSION_CHECK_RESULT.NOT_LATEST
             : VERSION_CHECK_RESULT.LATEST,
         )
-      } else {
-        resolve({
-          status: VERSION_CHECK_RESULT.FAILED,
-        })
       }
+    })
+
+    resolve({
+      status: VERSION_CHECK_RESULT.FAILED,
     })
   })
 }
@@ -135,11 +136,23 @@ async function consturctServer(moduleDefs) {
   const app = express()
   const { CORS_ALLOW_ORIGIN } = process.env
   app.set('trust proxy', true)
-
-  /**
-   * Serving static files
-   */
-  app.use(express.static(path.join(__dirname, 'public')))
+  // JANXLAND修改
+  let otherServerHandler = (req, res) => {
+    const api_map = {
+      tencent: qq,
+      kugou: kugou,
+    }
+    try {
+      api_map[req.query.server].api_map[req.baseUrl](
+        req._parsedUrl.search,
+      ).success((data) => {
+        res.status(200).send(data)
+      })
+    } catch (error) {
+      res.status(500).send({ msg: '666' })
+    }
+  }
+  //JANXLAND修改
   /**
    * CORS & Preflight request
    */
@@ -176,10 +189,15 @@ async function consturctServer(moduleDefs) {
   /**
    * Body Parser and File Upload
    */
-  app.use(express.json({ limit: '50mb' }))
-  app.use(express.urlencoded({ extended: false, limit: '50mb' }))
+  app.use(express.json())
+  app.use(express.urlencoded({ extended: false }))
 
   app.use(fileUpload())
+
+  /**
+   * Serving static files
+   */
+  app.use(express.static(path.join(__dirname, 'public')))
 
   /**
    * Cache
@@ -204,7 +222,55 @@ async function consturctServer(moduleDefs) {
 
   for (const moduleDef of moduleDefinitions) {
     // Register the route.
+    let axios = require('axios')
+
+    app.use('/puppeteer', async (req, res) => {
+      let url = req.body.url || req.query.url
+      if (!url) {
+        return res.status(400).send('Missing "url" parameter')
+      }
+      try {
+        const response = await axios.get(url, {
+          headers: {
+            'User-Agent': 'janxland/ablaze-backend',
+          },
+        })
+        res.send(response.data)
+      } catch (error) {
+        console.error(error)
+        res.status(500).send('Error fetching URL content')
+      }
+    })
     app.use(moduleDef.route, async (req, res) => {
+      const match = require('@unblockneteasemusic/server')
+      if (req.baseUrl === '/song/unblock') {
+        if (req.query.https == 'true') {
+          return match(req.query.id, [
+            'pyncmd',
+            'qq',
+            'kugou',
+            'kuwo',
+            'bilibili',
+          ]).then((result) => {
+            res.send(result)
+          })
+        } else {
+          return match(req.query.id, [
+            'pyncmd',
+            // 'qq',
+            // 'kuwo',
+            // 'migu',
+            // 'kugou',
+            // 'bilibili'
+          ]).then((result) => {
+            res.send(result)
+          })
+        }
+      }
+      if (req.query.server && req.query.server != 'netease') {
+        otherServerHandler(req, res)
+        return
+      }
       ;[req.query, req.body].forEach((item) => {
         if (typeof item.cookie === 'string') {
           item.cookie = cookieToJson(decode(item.cookie))
@@ -227,9 +293,6 @@ async function consturctServer(moduleDefs) {
 
           if (ip.substr(0, 7) == '::ffff:') {
             ip = ip.substr(7)
-          }
-          if (ip == '::1') {
-            ip = global.cnIp
           }
           // console.log(ip)
           obj[3] = {
@@ -317,7 +380,6 @@ async function serveNcmApi(options) {
 
   return appExt
 }
-
 module.exports = {
   serveNcmApi,
   getModulesDefinitions,
